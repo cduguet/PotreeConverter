@@ -6,6 +6,7 @@
 #include <mutex>
 #include <memory>
 #include <atomic>
+#include <cmath>
 
 #include "chunker_countsort_laszip.h"
 
@@ -21,6 +22,7 @@
 #include "LasLoader/LasLoader.h"
 #include "PotreeConverter.h"
 #include "logger.h"
+#include "brotli/encode.h"
 
 using json = nlohmann::json;
 
@@ -233,8 +235,13 @@ namespace chunker_countsort_laszip {
 					double uy = (double(Y) * posScale.y + posOffset.y - min.y) / size.y;
 					double uz = (double(Z) * posScale.z + posOffset.z - min.z) / size.z;
 
+					// we compare bounds of scaled values, 
+					// but scaled values may move slightly out of bounds due to float errors
+					// Try to fix by allowing points which are a tiny bit outside the box. 
+					double upperBound = std::nextafter(1.0, 2.0);
+
 					bool inBox = ux >= 0.0 && uy >= 0.0 && uz >= 0.0;
-					inBox = inBox && ux <= 1.0 && uy <= 1.0 && uz <= 1.0;
+					inBox = inBox && ux <= upperBound && uy <= upperBound && uz <= upperBound;
 
 					if (!inBox) {
 						stringstream ss;
@@ -360,7 +367,7 @@ namespace chunker_countsort_laszip {
 		return std::move(grid);
 	}
 
-	void addBuckets(string targetDir, vector<shared_ptr<Buffer>>& newBuckets) {
+	void addBuckets(string targetDir, vector<shared_ptr<Buffer>>& newBuckets, bool compressChunks) {
 
 		for(int nodeIndex = 0; nodeIndex < nodes.size(); nodeIndex++){
 
@@ -368,11 +375,83 @@ namespace chunker_countsort_laszip {
 				continue;
 			}
 
-			auto& node = nodes[nodeIndex];
-			string path = targetDir + "/chunks/" + node.id + ".bin";
+			auto& node = nodes[nodeIndex];			
 			auto buffer = newBuckets[nodeIndex];
 
-			writer->write(path, buffer);
+			if(!compressChunks){
+				string path = targetDir + "/chunks/" + node.id + ".bin";
+
+				writer->write(path, buffer);
+			}else{
+				
+				string path = targetDir + "/chunks/" + node.id + ".br";
+
+				int quality = 5;
+				int lgwin = BROTLI_DEFAULT_WINDOW;
+				auto mode = BROTLI_DEFAULT_MODE;
+				uint8_t* input_buffer = buffer->data_u8;
+				size_t input_size = buffer->size;
+
+				size_t encoded_size = input_size * 1.5 + 1'000;
+				shared_ptr<Buffer> outputBuffer = make_shared<Buffer>(encoded_size);
+				uint8_t* encoded_buffer = outputBuffer->data_u8;
+
+				BROTLI_BOOL success = BROTLI_FALSE;
+
+				for (int i = 0; i < 5; i++) {
+					success = BrotliEncoderCompress(quality, lgwin, mode, input_size, input_buffer, &encoded_size, encoded_buffer);
+
+					if (success == BROTLI_TRUE) {
+						break;
+					} else {
+						encoded_size = (encoded_size + 1024) * 1.5;
+						outputBuffer = make_shared<Buffer>(encoded_size);
+						encoded_buffer = outputBuffer->data_u8;
+
+						logger::WARN("reserved encoded_buffer size was too small. Trying again with size " + formatNumber(encoded_size) + ".");
+					}
+				}
+
+				if (success == BROTLI_FALSE) {
+					// stringstream ss;
+					// ss << "failed to compress node " << node->name << ". aborting conversion." ;
+					// logger::ERROR(ss.str());
+
+					exit(123);
+				}
+
+				// let's store compressed and uncompressed size of each batch, 
+				// so that we know how much mem to allocate during decompression
+				uint64_t uncompressedeSize = buffer->size;
+				uint64_t compressedeSize = encoded_size;
+				shared_ptr<Buffer> out = make_shared<Buffer>(16 + encoded_size);
+				memcpy(out->data_u8 +  0, &uncompressedeSize, 8);
+				memcpy(out->data_u8 +  8, &compressedeSize, 8);
+				memcpy(out->data_u8 + 16, encoded_buffer, encoded_size);
+
+				float ratio = double(out->size) / double(buffer->size);
+
+				// println("available_in:  {}", available_in);
+				// println("available_out: {}", available_out);
+				// println("total_out: {}", total_out);
+				// println("outPath: {}", outPath);
+				int iRatio = int(100.0 * ratio);
+				//println("compression ratio: {} %", iRatio);
+				
+				//{ // DEBUG
+				//	lock_guard<mutex> lock(mtx_dbg_compress);
+
+				//	totalUncompressed += input_size;
+				//	totalCompressed += encoded_size;
+				//}
+				
+
+				writer->write(path, out);
+
+				// writer->write(path, buffer);
+			}
+
+			
 
 		}
 	}
@@ -557,6 +636,7 @@ namespace chunker_countsort_laszip {
 				{5, 15},
 				{6, 10},
 				{7, 11},
+				{8, 12},
 			};
 
 			bool noMapping = formatToExtraIndex.find(header->point_data_format) == formatToExtraIndex.end();
@@ -657,7 +737,17 @@ namespace chunker_countsort_laszip {
 
 	}
 
-	void distributePoints(vector<Source> sources, Vector3 min, Vector3 max, string targetDir, NodeLUT& lut, State& state, Attributes& outputAttributes, Monitor* monitor) {
+	void distributePoints(
+		Options& options,
+		vector<Source> sources, 
+		Vector3 min, 
+		Vector3 max, 
+		string targetDir, 
+		NodeLUT& lut, 
+		State& state, 
+		Attributes& outputAttributes, 
+		Monitor* monitor
+	) {
 
 		cout << endl;
 		cout << "=======================================" << endl;
@@ -693,7 +783,7 @@ namespace chunker_countsort_laszip {
 
 		printElapsedTime("distributePoints1", tStart);
 
-		auto processor = [&mtx_push_point, &counters, targetDir, &state, tStart, &outputAttributes](shared_ptr<Task> task) {
+		auto processor = [&options, &mtx_push_point, &counters, targetDir, &state, tStart, &outputAttributes](shared_ptr<Task> task) {
 
 			auto path = task->path;
 			auto batchSize = task->batchSize;
@@ -908,7 +998,7 @@ namespace chunker_countsort_laszip {
 			state.duration = now() - tStart;
 
 			auto tAddBuckets = now();
-			addBuckets(targetDir, buckets);
+			addBuckets(targetDir, buckets, options.compressChunks);
 
 			// merge attribute metadata of this batch into global attribute metadata
 			for (int i = 0; i < outputAttributesCopy.list.size(); i++) {
@@ -1203,7 +1293,15 @@ namespace chunker_countsort_laszip {
 		return {gridSize, lut};
 	}
 
-	void doChunking(vector<Source> sources, string targetDir, Vector3 min, Vector3 max, State& state, Attributes outputAttributes, Monitor* monitor) {
+	void doChunking(
+		Options& options,
+		vector<Source> sources, 
+		string targetDir, 
+		Vector3 min, Vector3 max, 
+		State& state, 
+		Attributes outputAttributes, 
+		Monitor* monitor
+	) {
 
 		auto tStart = now();
 
@@ -1239,7 +1337,7 @@ namespace chunker_countsort_laszip {
 			auto lut = createLUT(grid, gridSize);
 
 			state.currentPass = 2;
-			distributePoints(sources, min, max, targetDir, lut, state, outputAttributes, monitor);
+			distributePoints(options, sources, min, max, targetDir, lut, state, outputAttributes, monitor);
 
 			{
 				double duration = now() - tStartDistribute;

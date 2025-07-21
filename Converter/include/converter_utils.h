@@ -67,7 +67,6 @@ struct State {
 	}
 };
 
-
 struct BoundingBox {
 	Vector3 min;
 	Vector3 max;
@@ -173,5 +172,6 @@ struct Options {
 	bool keepChunks = false;
 	bool noChunking = false;
 	bool noIndexing = false;
+	bool compressChunks = false;
 
 };

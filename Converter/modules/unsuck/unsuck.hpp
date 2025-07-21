@@ -512,6 +512,27 @@ inline void writeBinaryFile(string path, Buffer& data) {
 	of.close();
 }
 
+inline void writeBinaryFile(string path, void* data, size_t size) {
+	std::ios_base::sync_with_stdio(false);
+	auto of = fstream(path, ios::out | ios::binary);
+
+	int64_t remaining = size;
+	int64_t offset = 0;
+
+	while (remaining > 0) {
+		constexpr int64_t mb4 = int64_t(4 * 1024 * 1024);
+		int batchSize = std::min(remaining, mb4);
+		of.write(reinterpret_cast<char*>(data) + offset, batchSize);
+
+		offset += batchSize;
+		remaining -= batchSize;
+	}
+
+
+	of.close();
+}
+
+
 // taken from: https://stackoverflow.com/questions/2602013/read-whole-ascii-file-into-c-stdstring/2602060
 inline string readFile(string path) {
 

@@ -2,6 +2,7 @@
 #include <cerrno>
 #include <execution>
 #include <algorithm>
+#include <print>
 
 #include "indexer.h"
 
@@ -10,9 +11,11 @@
 #include "PotreeConverter.h"
 #include "DbgWriter.h"
 #include "brotli/encode.h"
+#include "brotli/decode.h"
 #include "HierarchyBuilder.h"
 
 using std::unique_lock;
+using std::println;
 
 namespace indexer{
 
@@ -141,6 +144,7 @@ namespace indexer{
 		auto toID = [](string filename) -> string {
 			string strID = stringReplace(filename, "chunk_", "");
 			strID = stringReplace(strID, ".bin", "");
+			strID = stringReplace(strID, ".br", "");
 
 			return strID;
 		};
@@ -150,7 +154,11 @@ namespace indexer{
 			string filename = entry.path().filename().string();
 			string chunkID = toID(filename);
 
-			if (!iEndsWith(filename, ".bin")) {
+
+			if (iEndsWith(filename, ".bin") || iEndsWith(filename, ".br")) {
+				// acceptable
+			}else{
+				// not a chunk format
 				continue;
 			}
 
@@ -1656,7 +1664,75 @@ void doIndexing(string targetDir, State& state, Options& options, Sampler& sampl
 		logger::INFO(msg.str());
 
 		indexer.bytesInMemory += filesize;
-		auto pointBuffer = readBinaryFile(chunk->file);
+
+		shared_ptr<Buffer> pointBuffer = nullptr;
+		if(iEndsWith(chunk->file, "bin")){
+			pointBuffer = readBinaryFile(chunk->file);
+		}else if(iEndsWith(chunk->file, "br")){
+			shared_ptr<Buffer> compressed = readBinaryFile(chunk->file);
+
+			// first, let's figure out the size of the total uncompressed buffer, which we stored with each compressed batch
+			uint64_t uncompressedSize = 0;
+			uint64_t offset = 0;
+			while(offset < compressed->size){
+				uint64_t uncompressedBatchSize = compressed->get<uint64_t>(offset + 0);
+				uint64_t compressedBatchSize = compressed->get<uint64_t>(offset + 8);
+
+				println("uncompressedBatchSize: {}, compressedBatchSize: {}", uncompressedBatchSize, compressedBatchSize);
+
+				offset = offset + 16 + compressedBatchSize;
+				uncompressedSize = uncompressedSize + uncompressedBatchSize;
+			}
+			println("uncompressedSize: {}", uncompressedSize);
+
+			// allocate sufficient memory for all decompressed chunks
+			size_t decoded_size = uncompressedSize;
+			pointBuffer = make_shared<Buffer>(decoded_size);
+
+			// now decompress chunks
+			uint64_t offset_in = 0;
+			uint64_t offset_out = 0;
+			while(offset_in < compressed->size){
+				uint64_t uncompressedBatchSize = compressed->get<uint64_t>(offset_in + 0);
+				uint64_t compressedBatchSize = compressed->get<uint64_t>(offset_in + 8);
+
+				size_t encoded_size = compressedBatchSize;
+				const uint8_t* encoded_buffer = compressed->data_u8 + offset_in + 16;
+				size_t actualDecodedSize = uncompressedBatchSize; // brotli uses this var as input, and overwrites it with the actual decoded size afterwards
+				uint8_t* decoded_buffer = pointBuffer->data_u8 + offset_out;
+
+				auto result = BrotliDecoderDecompress(encoded_size, encoded_buffer, &actualDecodedSize, decoded_buffer);
+
+				if(result != BROTLI_DECODER_RESULT_SUCCESS){
+					println("Failed to decode brotli-compressed chunk.");
+					exit(54256);
+				}else if(uncompressedBatchSize != actualDecodedSize){
+					println("Mismatch in recorded (and expected) uncompressed size vs. actual uncompressed size. {} != {}", 
+						uncompressedBatchSize, actualDecodedSize);
+					exit(7345);
+				}
+
+				offset_in += 16 + compressedBatchSize;
+				offset_out += uncompressedBatchSize;
+			}
+
+
+
+			// BrotliDecoderState* state = BrotliDecoderCreateInstance(nullptr, nullptr, nullptr);
+			// BrotliDecoderResult result = BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT;
+
+			// size_t encoded_size = brotliBuffer->size;
+			// const uint8_t* encoded_buffer = (const uint8_t*)brotliBuffer->data;
+			// size_t decoded_size = decoded_buffer->size;
+			// uint8_t* decoded_buffer = (uint8_t*)decodedBuffer->data;
+			// BrotliDecoderDecompress(encoded_size, encoded_buffer, decoded_size, decoded_buffer);
+
+
+
+		}else{
+			println("ERROR: Tried loading chunk with unhandled extension: {}", chunk->file);
+			exit(5234);
+		}
 
 		auto tStartChunking = now();
 
