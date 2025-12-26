@@ -56,17 +56,37 @@ namespace indexer{
 		string metadataText = readTextFile(chunkDirectory + "/metadata.json");
 		json js = json::parse(metadataText);
 
-		Vector3 min = {
-			js["min"][0].get<double>(),
-			js["min"][1].get<double>(),
-			js["min"][2].get<double>()
-		};
+		      auto to_double = [](const json& j) -> double {
+		          if(j.is_number()){
+		              return j.get<double>();
+		          }else if(j.is_string()){
+		              return std::stod(j.get<string>());
+		          }
+		          return 0.0;
+		      };
 
-		Vector3 max = {
-			js["max"][0].get<double>(),
-			js["max"][1].get<double>(),
-			js["max"][2].get<double>()
-		};
+		      Vector3 min;
+		      Vector3 max;
+
+		      if (js["min"].is_array() && js["min"].size() >= 3) {
+		          min = {
+		              to_double(js["min"][0]),
+		              to_double(js["min"][1]),
+		              to_double(js["min"][2])
+		          };
+		      } else {
+		           min = { std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity() };
+		      }
+
+		      if (js["max"].is_array() && js["max"].size() >= 3) {
+		          max = {
+		              to_double(js["max"][0]),
+		              to_double(js["max"][1]),
+		              to_double(js["max"][2])
+		          };
+		      } else {
+		           max = { -std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity() };
+		      }
 
 		vector<Attribute> attributeList;
 		auto jsAttributes = js["attributes"];
@@ -83,6 +103,15 @@ namespace indexer{
 			auto jsMax = jsAttribute["max"];
 			auto jsScale = jsAttribute["scale"];
 			auto jsOffset = jsAttribute["offset"];
+
+			         auto to_double = [](const json& j) -> double {
+			             if(j.is_number()){
+			                 return j.get<double>();
+			             }else if(j.is_string()){
+			                 return std::stod(j.get<string>());
+			             }
+			             return 0.0;
+			         };
 
 			// int64_t mask = 0;
 			// if(jsAttribute.contains("mask")){
@@ -103,35 +132,55 @@ namespace indexer{
 			// attribute.mask = mask;
 			attribute.histogram = histogram;
 
+			auto getValue = [](const json& j, int index, double defaultVal) -> double {
+				if(!j.is_null() && j.is_array() && j.size() > index && !j[index].is_null()) {
+					if(j[index].is_number()){
+						return j[index].get<double>();
+					} else if(j[index].is_string()){
+						return std::stod(j[index].get<string>());
+					}
+				}
+				return defaultVal;
+			};
+
 			if (numElements >= 1) {
-				attribute.min.x = jsMin[0] == nullptr ? Infinity : double(jsMin[0]);
-				attribute.max.x = jsMax[0] == nullptr ? Infinity : double(jsMax[0]);
-				attribute.scale.x = jsScale[0] == nullptr ? 1.0 : double(jsScale[0]);
-				attribute.offset.x = jsOffset[0] == nullptr ? 0.0 : double(jsOffset[0]);
+				attribute.min.x = getValue(jsMin, 0, std::numeric_limits<double>::infinity());
+				attribute.max.x = getValue(jsMax, 0, -std::numeric_limits<double>::infinity());
+				attribute.scale.x = getValue(jsScale, 0, 1.0);
+				attribute.offset.x = getValue(jsOffset, 0, 0.0);
 			}
 			if (numElements >= 2) {
-				attribute.min.y = jsMin[1] == nullptr ? Infinity : double(jsMin[1]);
-				attribute.max.y = jsMax[1] == nullptr ? Infinity : double(jsMax[1]);
-				attribute.scale.y = jsScale[1] == nullptr ? 1.0 : double(jsScale[1]);
-				attribute.offset.y = jsOffset[1] == nullptr ? 0.0 : double(jsOffset[1]);
+				attribute.min.y = getValue(jsMin, 1, std::numeric_limits<double>::infinity());
+				attribute.max.y = getValue(jsMax, 1, -std::numeric_limits<double>::infinity());
+				attribute.scale.y = getValue(jsScale, 1, 1.0);
+				attribute.offset.y = getValue(jsOffset, 1, 0.0);
 			}
 			if (numElements >= 3) {
-				attribute.min.z = jsMin[2] == nullptr ? Infinity : double(jsMin[2]);
-				attribute.max.z = jsMax[2] == nullptr ? Infinity : double(jsMax[2]);
-				attribute.scale.z = jsScale[2] == nullptr ? 1.0 : double(jsScale[2]);
-				attribute.offset.z = jsOffset[2] == nullptr ? 0.0 : double(jsOffset[2]);
+				attribute.min.z = getValue(jsMin, 2, std::numeric_limits<double>::infinity());
+				attribute.max.z = getValue(jsMax, 2, -std::numeric_limits<double>::infinity());
+				attribute.scale.z = getValue(jsScale, 2, 1.0);
+				attribute.offset.z = getValue(jsOffset, 2, 0.0);
 			}
 
 			attributeList.push_back(attribute);
 		}
 
-		double scaleX = js["scale"][0];
-		double scaleY = js["scale"][1];
-		double scaleZ = js["scale"][2];
+		auto getGlobalValue = [](const json& j, string key, int index, double defaultVal) -> double {
+			if(j.contains(key) && j[key].is_array() && j[key].size() > index && !j[key][index].is_null()){
+				auto& val = j[key][index];
+				if(val.is_number()) return val.get<double>();
+				if(val.is_string()) return std::stod(val.get<string>());
+			}
+			return defaultVal;
+		};
 
-		double offsetX = js["offset"][0];
-		double offsetY = js["offset"][1];
-		double offsetZ = js["offset"][2];
+		double scaleX = getGlobalValue(js, "scale", 0, 1.0);
+		double scaleY = getGlobalValue(js, "scale", 1, 1.0);
+		double scaleZ = getGlobalValue(js, "scale", 2, 1.0);
+
+		double offsetX = getGlobalValue(js, "offset", 0, 0.0);
+		double offsetY = getGlobalValue(js, "offset", 1, 0.0);
+		double offsetZ = getGlobalValue(js, "offset", 2, 0.0);
 
 		Attributes attributes(attributeList);
 		attributes.posScale = { scaleX, scaleY, scaleZ };
@@ -234,6 +283,10 @@ namespace indexer{
 			
 			node->fcrs.push_back(fcr);
 			node->numPoints += fcr.node->numPoints;
+		}
+
+		if (nodesMap.find("r") == nodesMap.end()) {
+			return {};
 		}
 
 		// recursively merge leaves if sum(points) < threshold
@@ -736,7 +789,7 @@ vector<NodeCandidate> createNodes(vector<vector<int64_t>>& pyramid) {
 	vector<vector<int64_t>> pyramidOffsets;
 	for (auto& counters : pyramid) {
 
-		if (counters.size() == 1) {
+		if (counters.size() <= 1) {
 			pyramidOffsets.push_back({ 0 });
 		} else {
 

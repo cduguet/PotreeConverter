@@ -145,23 +145,33 @@ CpuData getCpuData() {
 	return data;
 }
 
-#elif defined(__linux__)
+#elif defined(__APPLE__) || defined(__linux__)
 
-// see https://stackoverflow.com/questions/63166/how-to-determine-cpu-and-memory-consumption-from-inside-a-process
+// Shared implementation for Unix-like systems (Linux, macOS)
+// Note: sysinfo is Linux-specific, so we need conditional compilation for memory stats if we want detailed system-wide info.
+// For now, we'll implement a basic version or specific versions as needed.
 
+#if defined(__linux__)
 #include "sys/types.h"
 #include "sys/sysinfo.h"
+#elif defined(__APPLE__)
+#include <mach/mach.h>
+#include <sys/sysctl.h>
+#endif
 
 #include "stdlib.h"
 #include "stdio.h"
 #include "string.h"
 
+// ... (Existing Linux helper functions like parseLine can remain if useful, or be adapted)
+
+#if defined(__linux__)
 int parseLine(char* line){
     // This assumes that a digit will be found and the line ends in " Kb".
     int i = strlen(line);
     const char* p = line;
     
-	while (*p < '0' || *p > '9'){ 
+	while (*p < '0' || *p > '9'){
 		p++;
 	}
 	
@@ -206,10 +216,14 @@ int64_t getPhysicalMemoryUsedByProcess(){ //Note: this value is in KB!
 	
     return result;
 }
+#endif
 
 
 MemoryData getMemoryData() {
 	
+	MemoryData data;
+	
+#if defined(__linux__)
 	struct sysinfo memInfo;
 
 	sysinfo (&memInfo);
@@ -230,27 +244,41 @@ MemoryData getMemoryData() {
 	int64_t virtualMemUsedByMe = getVirtualMemoryUsedByProcess();
 	int64_t physMemUsedByMe = getPhysicalMemoryUsedByProcess();
 
+    data.virtual_total = totalVirtualMem;
+    data.virtual_used = virtualMemUsed;
+    data.physical_total = totalPhysMem;
+    data.physical_used = physMemUsed;
+    
+#elif defined(__APPLE__)
+    // macOS implementation
+    struct mach_task_basic_info info;
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info, &count) == KERN_SUCCESS) {
+        data.virtual_usedByProcess = info.virtual_size;
+        data.physical_usedByProcess = info.resident_size;
+    }
+    
+    // System wide memory info on macOS (simplified)
+    int64_t totalPhysMem = 0;
+    int mib[2];
+    mib[0] = CTL_HW;
+    mib[1] = HW_MEMSIZE;
+    size_t length = sizeof(int64_t);
+    sysctl(mib, 2, &totalPhysMem, &length, NULL, 0);
+    
+    data.physical_total = totalPhysMem;
+    // other fields might require more complex queries
+#endif
 
-	MemoryData data;
-	
+
 	static int64_t virtualUsedMax = 0;
 	static int64_t physicalUsedMax = 0;
 
-	virtualUsedMax = std::max(virtualMemUsedByMe, virtualUsedMax);
-	physicalUsedMax = std::max(physMemUsedByMe, physicalUsedMax);
+	virtualUsedMax = std::max((int64_t)data.virtual_usedByProcess, virtualUsedMax);
+	physicalUsedMax = std::max((int64_t)data.physical_usedByProcess, physicalUsedMax);
 
 	{
-		data.virtual_total = totalVirtualMem;
-		data.virtual_used = virtualMemUsed;
-		data.physical_total = totalPhysMem;
-		data.physical_used = physMemUsed;
-
-	}
-
-	{
-		data.virtual_usedByProcess = virtualMemUsedByMe;
 		data.virtual_usedByProcess_max = virtualUsedMax;
-		data.physical_usedByProcess = physMemUsedByMe;
 		data.physical_usedByProcess_max = physicalUsedMax;
 	}
 
@@ -305,15 +333,18 @@ static unsigned long long lastTotalUser, lastTotalUserLow, lastTotalSys, lastTot
 void init() {
 	numProcessors = std::thread::hardware_concurrency();
 	
+#if defined(__linux__)
 	FILE* file = fopen("/proc/stat", "r");
     fscanf(file, "cpu %llu %llu %llu %llu", &lastTotalUser, &lastTotalUserLow, &lastTotalSys, &lastTotalIdle);
     fclose(file);
+#endif
 
 	initialized = true;
 }
 
 double getCpuUsage(){
-    double percent;
+    double percent = 0.0;
+#if defined(__linux__)
     FILE* file;
     unsigned long long totalUser, totalUserLow, totalSys, totalIdle, total;
 
@@ -326,8 +357,8 @@ double getCpuUsage(){
         //Overflow detection. Just skip this value.
         percent = -1.0;
     }else{
-        total = (totalUser - lastTotalUser) 
-			+ (totalUserLow - lastTotalUserLow) 
+        total = (totalUser - lastTotalUser)
+			+ (totalUserLow - lastTotalUserLow)
 			+ (totalSys - lastTotalSys);
         percent = total;
         total += (totalIdle - lastTotalIdle);
@@ -339,6 +370,7 @@ double getCpuUsage(){
     lastTotalUserLow = totalUserLow;
     lastTotalSys = totalSys;
     lastTotalIdle = totalIdle;
+#endif
 
     return percent;
 }

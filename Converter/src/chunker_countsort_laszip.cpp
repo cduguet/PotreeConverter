@@ -925,14 +925,16 @@ namespace chunker_countsort_laszip {
 				target.max.z = std::max(target.max.z, source.max.z);
 
 				// target.mask = target.mask | source.mask;
-				
-				for(int j = 0; j < target.histogram.size(); j++){
-					target.histogram[j] = target.histogram[j] + source.histogram[j];
-				}
-			}
-
-
-		};
+						
+						if(target.histogram.size() == source.histogram.size()){
+							for(int j = 0; j < target.histogram.size(); j++){
+								target.histogram[j] = target.histogram[j] + source.histogram[j];
+							}
+						}
+					}
+		
+		
+				};
 
 		TaskPool<Task> pool(numChunkerThreads, processor);
 

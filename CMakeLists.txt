@@ -55,13 +55,15 @@ target_include_directories(PotreeConverter PRIVATE "./Converter/libs")
 
 if (UNIX)
 	find_package(Threads REQUIRED)
-	find_package(TBB REQUIRED)
+	# find_package(TBB REQUIRED)
 	
 	target_link_libraries(${PROJECT_NAME} Threads::Threads)
-	target_link_libraries(${PROJECT_NAME} tbb)
+	# target_link_libraries(${PROJECT_NAME} tbb)
 
+    include_directories("/opt/homebrew/include")
+    target_link_libraries(${PROJECT_NAME} "/opt/homebrew/lib/libtbb.dylib")
 
-	#SET(CMAKE_CXX_FLAGS "-pthread -ltbb")
+ #SET(CMAKE_CXX_FLAGS "-pthread -ltbb")
 endif (UNIX)
 
 ###############################################
