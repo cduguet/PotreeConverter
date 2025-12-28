@@ -37,6 +37,10 @@ RUN mkdir -p /data/input /data/output
 # Create a symlink for PotreeConverter in /usr/local/bin
 RUN ln -s /app/PotreeConverter/build/PotreeConverter /usr/local/bin/PotreeConverter
 
+# Copy helper script for converting E57 to LAS and then to Potree
+RUN cp /app/PotreeConverter/scripts/convert.sh /usr/local/bin/convert.sh && \
+    chmod +x /usr/local/bin/convert.sh
+
 # Set default working directory for data
 WORKDIR /data
 
