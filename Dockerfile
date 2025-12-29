@@ -16,8 +16,14 @@ RUN apt-get update && apt-get install -y \
     # PDAL for E57 to LAS conversion
     pdal \
     libpdal-dev \
+    # Python for panorama extraction
+    python3 \
+    python3-pip \
     # Additional utilities
     && rm -rf /var/lib/apt/lists/*
+
+# Install pye57 for panoramic image extraction from E57 files
+RUN pip3 install pye57
 
 # Create working directory
 WORKDIR /app
@@ -37,9 +43,11 @@ RUN mkdir -p /data/input /data/output
 # Create a symlink for PotreeConverter in /usr/local/bin
 RUN ln -s /app/PotreeConverter/build/PotreeConverter /usr/local/bin/PotreeConverter
 
-# Copy helper script for converting E57 to LAS and then to Potree
+# Copy helper scripts for converting E57 to LAS and then to Potree
 RUN cp /app/PotreeConverter/scripts/convert.sh /usr/local/bin/convert.sh && \
-    chmod +x /usr/local/bin/convert.sh
+    chmod +x /usr/local/bin/convert.sh && \
+    cp /app/PotreeConverter/scripts/extract_panoramic_images.py /usr/local/bin/extract_panoramic_images.py && \
+    chmod +x /usr/local/bin/extract_panoramic_images.py
 
 # Set default working directory for data
 WORKDIR /data

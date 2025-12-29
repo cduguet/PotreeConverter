@@ -82,7 +82,7 @@
 		"variant": "cpp"
 	},
 	"files.trimTrailingWhitespace": false,
-	"editor.fontSize": 28,
+	"editor.fontSize": 12,
 	"editor.autoIndent": "advanced",
 	"editor.detectIndentation": false,
 	"editor.insertSpaces": false,
