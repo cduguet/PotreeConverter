@@ -1,10 +1,20 @@
 # Dockerfile for PotreeConverter with E57 support
 # This image builds PotreeConverter and includes PDAL for E57 to LAS conversion
+# Features:
+#   - E57 to Potree conversion via PDAL
+#   - Automatic panoramic image extraction from E57 files
+#   - Checkpoint/resume for resilient conversion
+#   - Retry logic for handling transient failures
 
 FROM ubuntu:22.04
 
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
+
+# Default environment variables for resilient conversion
+ENV MAX_RETRIES=3
+ENV RETRY_DELAY=5
+ENV FORCE_RESTART=false
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \

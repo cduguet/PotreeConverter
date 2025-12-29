@@ -14,7 +14,7 @@ Altough the converter made a major step to version 2.0, the format it produces i
 
 # Docker Usage
 
-A Docker image is provided for easy conversion of point clouds, including E57 files with panoramic images.
+A Docker image is provided for easy conversion of point clouds, including E57 files with panoramic images. The converter includes resilient features like checkpoint/resume and automatic retry logic.
 
 ## Building the Docker Image
 
@@ -22,12 +22,27 @@ A Docker image is provided for easy conversion of point clouds, including E57 fi
 docker build -t potree-converter .
 ```
 
+## Quick Start (Recommended for Large Files)
+
+For large E57 files (10GB+), use this command with memory and shared memory settings:
+
+```bash
+docker run --rm \
+  -m 24g \
+  --shm-size=2g \
+  -v /path/to/data:/data \
+  potree-converter convert.sh /data/input.e57 /data/output
+```
+
+Or use the provided docker-compose file for even easier operation.
+
 ## Converting Point Clouds
 
 ### Basic Usage (LAS/LAZ files)
 
 ```bash
 docker run --rm \
+  --shm-size=1g \
   -v /path/to/data:/data \
   potree-converter convert.sh /data/input.las /data/output
 ```
@@ -38,6 +53,7 @@ E57 files can contain embedded panoramic images. The converter will automaticall
 
 ```bash
 docker run --rm \
+  --shm-size=2g \
   -v /path/to/data:/data \
   potree-converter convert.sh /data/input.e57 /data/output
 ```
@@ -55,24 +71,78 @@ output/
     └── metadata.json  (contains pose, rotation, sensor info for each image)
 ```
 
+### Resilient Conversion (Checkpoint/Resume)
+
+The converter automatically saves checkpoints after completing each step. If conversion fails (e.g., due to memory limits), you can simply re-run the same command and it will **skip completed steps**.
+
+**Steps that are checkpointed:**
+1. Panoramic image extraction (from E57)
+2. E57 to LAS conversion
+3. PotreeConverter processing
+
+**Example: Resume after failure**
+```bash
+# First run - fails due to memory
+docker run --rm -v /data:/data potree-converter convert.sh /data/large.e57 /data/output
+# Output: "PotreeConverter failed... Checkpoints saved."
+
+# Second run - skips panorama extraction and E57 conversion, retries PotreeConverter
+docker run --rm -m 32g --shm-size=2g -v /data:/data potree-converter convert.sh /data/large.e57 /data/output
+# Output: "→ Skipping panorama extraction (already completed)"
+#         "→ Skipping E57→LAS conversion (already completed)"
+#         "STEP 3: Running PotreeConverter..."
+```
+
+**Force restart from scratch:**
+```bash
+docker run --rm \
+  -e FORCE_RESTART=true \
+  -v /path/to/data:/data \
+  potree-converter convert.sh /data/input.e57 /data/output
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAX_RETRIES` | 3 | Number of retry attempts for PotreeConverter |
+| `RETRY_DELAY` | 5 | Delay between retries (seconds) |
+| `FORCE_RESTART` | false | Set to `true` to ignore checkpoints |
+
+Example with custom retry settings:
+```bash
+docker run --rm \
+  -e MAX_RETRIES=5 \
+  -e RETRY_DELAY=10 \
+  -v /path/to/data:/data \
+  potree-converter convert.sh /data/input.e57 /data/output
+```
+
 ### Memory Requirements for Large Files
 
 Large E57 files (10GB+) require significant memory for conversion. The PotreeConverter processes points in memory, so larger files need more RAM.
 
 **Important:** On macOS and Windows, Docker Desktop has a memory limit that must be configured in Docker Desktop settings BEFORE running the container. The `-m` flag only sets an upper bound but cannot exceed Docker Desktop's configured limit.
 
-**Recommended memory based on file size:**
-| File Size | Recommended Docker Desktop Memory |
-|-----------|----------------------------------|
-| < 5 GB    | 8 GB                             |
-| 5-15 GB   | 16-24 GB                         |
-| 15-30 GB  | 32-48 GB                         |
-| > 30 GB   | 64+ GB                           |
+**Recommended settings based on file size:**
 
-Example with memory limit (after configuring Docker Desktop):
+| File Size | Memory (`-m`) | Shared Memory (`--shm-size`) |
+|-----------|---------------|------------------------------|
+| < 5 GB    | 8 GB          | 1 GB                         |
+| 5-15 GB   | 16-24 GB      | 2 GB                         |
+| 15-30 GB  | 32-48 GB      | 4 GB                         |
+| > 30 GB   | 64+ GB        | 8 GB                         |
+
+**Why shared memory (`--shm-size`) matters:**
+- Default Docker shared memory is only 64MB
+- PotreeConverter and PDAL use shared memory for inter-process communication
+- Insufficient shared memory can cause crashes or performance issues
+
+Example with full memory configuration:
 ```bash
 docker run --rm \
-  -m 24g \
+  -m 32g \
+  --shm-size=4g \
   -v /path/to/data:/data \
   potree-converter convert.sh /data/input.e57 /data/output
 ```
@@ -95,6 +165,7 @@ To use PotreeConverter directly with more options:
 
 ```bash
 docker run --rm \
+  --shm-size=2g \
   -v /path/to/data:/data \
   potree-converter PotreeConverter /data/input.las -o /data/output -m poisson
 ```
@@ -103,6 +174,34 @@ Available sampling methods:
 - `poisson` (default): Poisson-disk sampling for even point distribution
 - `random`: Random sampling
 
+## Docker Compose (Recommended)
+
+For convenience, you can use docker-compose with preconfigured settings:
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+services:
+  potree:
+    build: .
+    image: potree-converter
+    shm_size: '4gb'
+    volumes:
+      - ./data:/data
+    environment:
+      - MAX_RETRIES=3
+      - RETRY_DELAY=5
+    deploy:
+      resources:
+        limits:
+          memory: 32G
+```
+
+Run with:
+```bash
+docker compose run --rm potree convert.sh /data/input.e57 /data/output
+```
+
 ## macOS Docker Desktop Memory Settings
 
 On macOS, Docker Desktop has default memory limits. To increase memory:
@@ -110,8 +209,10 @@ On macOS, Docker Desktop has default memory limits. To increase memory:
 1. Open Docker Desktop
 2. Go to **Settings** (gear icon)
 3. Select **Resources**
-4. Adjust **Memory** slider to desired value (e.g., 16GB or more)
+4. Adjust **Memory** slider to desired value (e.g., 24GB or more)
 5. Click **Apply & Restart**
+
+**Note:** On Apple Silicon Macs, you may need to allocate more memory than on Intel Macs due to architecture differences.
 
 # Publications
 

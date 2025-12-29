@@ -1,0 +1,45 @@
+# Docker Compose configuration for PotreeConverter
+# Usage:
+#   docker compose build
+#   docker compose run --rm potree convert.sh /data/input.e57 /data/output
+
+version: '3.8'
+
+services:
+  potree:
+    build: .
+    image: potree-converter
+    # Shared memory - important for large file processing
+    shm_size: '4gb'
+    # Mount data directory
+    volumes:
+      - ./data:/data
+    # Environment variables for resilient conversion
+    environment:
+      - MAX_RETRIES=3
+      - RETRY_DELAY=5
+      - FORCE_RESTART=false
+    # Memory limits (adjust based on your file sizes)
+    deploy:
+      resources:
+        limits:
+          memory: 32G
+    # Default command shows help
+    command: ["bash", "-c", "cd /app/PotreeConverter/build && ./PotreeConverter --help"]
+
+  # Alternative service with higher memory for very large files
+  potree-large:
+    build: .
+    image: potree-converter
+    shm_size: '8gb'
+    volumes:
+      - ./data:/data
+    environment:
+      - MAX_RETRIES=5
+      - RETRY_DELAY=10
+      - FORCE_RESTART=false
+    deploy:
+      resources:
+        limits:
+          memory: 64G
+    command: ["bash", "-c", "cd /app/PotreeConverter/build && ./PotreeConverter --help"]
