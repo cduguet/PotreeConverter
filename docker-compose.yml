@@ -1,7 +1,11 @@
 # Docker Compose configuration for PotreeConverter
+#
 # Usage:
 #   docker compose build
 #   docker compose run --rm potree convert.sh /data/input.e57 /data/output
+#
+# For proper file permissions (files owned by your user instead of root):
+#   docker compose run --rm --user "$(id -u):$(id -g)" potree convert.sh /data/input.e57 /data/output
 
 version: '3.8'
 

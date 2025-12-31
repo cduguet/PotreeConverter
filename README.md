@@ -28,6 +28,7 @@ For large E57 files (10GB+), use this command with memory and shared memory sett
 
 ```bash
 docker run --rm \
+  --user "$(id -u):$(id -g)" \
   -m 24g \
   --shm-size=2g \
   -v /path/to/data:/data \
@@ -36,12 +37,31 @@ docker run --rm \
 
 Or use the provided docker-compose file for even easier operation.
 
+## File Permissions
+
+By default, Docker containers run as root, which means output files will be owned by root and you may not be able to delete them without `sudo`. To ensure output files are owned by your user, use the `--user` flag:
+
+```bash
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -v /path/to/data:/data \
+  potree-converter convert.sh /data/input.e57 /data/output
+```
+
+This passes your current user ID and group ID to the container, so all created files will be owned by you.
+
+**With docker-compose:**
+```bash
+docker compose run --rm --user "$(id -u):$(id -g)" potree convert.sh /data/input.e57 /data/output
+```
+
 ## Converting Point Clouds
 
 ### Basic Usage (LAS/LAZ files)
 
 ```bash
 docker run --rm \
+  --user "$(id -u):$(id -g)" \
   --shm-size=1g \
   -v /path/to/data:/data \
   potree-converter convert.sh /data/input.las /data/output
@@ -53,6 +73,7 @@ E57 files can contain embedded panoramic images. The converter will automaticall
 
 ```bash
 docker run --rm \
+  --user "$(id -u):$(id -g)" \
   --shm-size=2g \
   -v /path/to/data:/data \
   potree-converter convert.sh /data/input.e57 /data/output
@@ -76,30 +97,54 @@ output/
 The converter automatically saves checkpoints after completing each step. If conversion fails (e.g., due to memory limits), you can simply re-run the same command and it will **skip completed steps**.
 
 **Steps that are checkpointed:**
-1. Panoramic image extraction (from E57)
+1. Panoramic image extraction (from E57) - only checkpointed on success or when no images exist
 2. E57 to LAS conversion
 3. PotreeConverter processing
+
+**Important:** Panorama extraction checkpoints are only created when:
+- At least one image was successfully extracted, OR
+- The E57 file contains no panoramic images (nothing to extract)
+
+If panorama extraction fails due to errors (permission denied, disk full, etc.), the checkpoint is NOT created, allowing the step to be retried.
 
 **Example: Resume after failure**
 ```bash
 # First run - fails due to memory
-docker run --rm -v /data:/data potree-converter convert.sh /data/large.e57 /data/output
+docker run --rm --user "$(id -u):$(id -g)" -v /data:/data potree-converter convert.sh /data/large.e57 /data/output
 # Output: "PotreeConverter failed... Checkpoints saved."
 
 # Second run - skips panorama extraction and E57 conversion, retries PotreeConverter
-docker run --rm -m 32g --shm-size=2g -v /data:/data potree-converter convert.sh /data/large.e57 /data/output
-# Output: "→ Skipping panorama extraction (already completed)"
-#         "→ Skipping E57→LAS conversion (already completed)"
+docker run --rm --user "$(id -u):$(id -g)" -m 32g --shm-size=2g -v /data:/data potree-converter convert.sh /data/large.e57 /data/output
+# Output: "[INFO] Skipping panorama extraction (already completed)"
+#         "[INFO] Skipping E57→LAS conversion (already completed)"
 #         "STEP 3: Running PotreeConverter..."
 ```
 
 **Force restart from scratch:**
 ```bash
 docker run --rm \
+  --user "$(id -u):$(id -g)" \
   -e FORCE_RESTART=true \
   -v /path/to/data:/data \
   potree-converter convert.sh /data/input.e57 /data/output
 ```
+
+### Exit Codes
+
+The converter uses specific exit codes to indicate different failure modes:
+
+| Exit Code | Description |
+|-----------|-------------|
+| 0 | Success |
+| 1 | Invalid arguments |
+| 2 | Input file not found |
+| 3 | Output directory creation failed |
+| 4 | Panorama extraction failed (all images failed) |
+| 5 | E57 to LAS conversion failed |
+| 6 | PotreeConverter failed |
+| 7 | Permission error |
+
+These exit codes can be used in scripts to handle different failure scenarios appropriately.
 
 ### Environment Variables
 
@@ -112,6 +157,7 @@ docker run --rm \
 Example with custom retry settings:
 ```bash
 docker run --rm \
+  --user "$(id -u):$(id -g)" \
   -e MAX_RETRIES=5 \
   -e RETRY_DELAY=10 \
   -v /path/to/data:/data \
@@ -141,6 +187,7 @@ Large E57 files (10GB+) require significant memory for conversion. The PotreeCon
 Example with full memory configuration:
 ```bash
 docker run --rm \
+  --user "$(id -u):$(id -g)" \
   -m 32g \
   --shm-size=4g \
   -v /path/to/data:/data \
@@ -153,11 +200,19 @@ If you only need to extract panoramic images from an E57 file (without point clo
 
 ```bash
 docker run --rm \
+  --user "$(id -u):$(id -g)" \
   -v /path/to/data:/data \
   potree-converter python3 /usr/local/bin/extract_panoramic_images.py \
     --source /data/input.e57 \
     --output /data/output
 ```
+
+The panorama extractor has its own exit codes:
+- `0` - Success (at least one image extracted)
+- `1` - No images found in E57 file (not an error)
+- `2` - Error opening or reading E57 file
+- `3` - Error writing output files (permission denied, disk full, etc.)
+- `4` - Invalid arguments or source file not found
 
 ### Direct PotreeConverter Usage
 
@@ -165,6 +220,7 @@ To use PotreeConverter directly with more options:
 
 ```bash
 docker run --rm \
+  --user "$(id -u):$(id -g)" \
   --shm-size=2g \
   -v /path/to/data:/data \
   potree-converter PotreeConverter /data/input.las -o /data/output -m poisson
@@ -197,9 +253,9 @@ services:
           memory: 32G
 ```
 
-Run with:
+Run with (note the `--user` flag for proper file permissions):
 ```bash
-docker compose run --rm potree convert.sh /data/input.e57 /data/output
+docker compose run --rm --user "$(id -u):$(id -g)" potree convert.sh /data/input.e57 /data/output
 ```
 
 ## macOS Docker Desktop Memory Settings
